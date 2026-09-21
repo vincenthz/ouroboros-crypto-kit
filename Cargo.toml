@@ -1,0 +1,47 @@
+[workspace]
+
+[package]
+name = "ouroboros-crypto-kit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+description = "Cardano cryptography (KES, VRF, Plutus primitives)"
+
+[lib]
+# `capi` needs the C library forms
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+cryptoxide = { version = "0.6.1", default-features = false, features = [
+    "blake2",
+    "sha2",
+    "sha3",
+    "ripemd160",
+    "digest",
+    "curve25519",
+    "ed25519",
+] }
+eccoxide = { version = "0.5.0", default-features = false, features = [
+    "curve25519",
+    "bls12-381",
+    "bls12-381-hash-to-curve",
+    "p256k1",
+    "table",
+] }
+blst = { version = "0.3.17", optional = true }
+libsecp256k1 = { package = "secp256k1", version = "0.33.1", default-features = false, optional = true }
+
+[features]
+default = ["kes", "vrf", "plutus"]
+kes = []
+vrf = []
+plutus = []
+blst = ["plutus", "dep:blst"]
+secp256k1 = ["plutus", "dep:libsecp256k1"]
+
+# The C ABI of the crate: libsodium + VRF extension; libsecp256k1; blst
+capi = ["kes", "vrf", "plutus", "cryptoxide/hmac"]
+
+[profile.release]
+debug = true
