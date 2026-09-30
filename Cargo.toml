@@ -6,7 +6,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
-description = "Cardano cryptography (KES, VRF, Plutus primitives)"
+description = "Cardano cryptography (Byron keys, KES, VRF, Plutus primitives)"
 
 [lib]
 # `capi` needs the C library forms
@@ -33,7 +33,10 @@ blst = { version = "0.3.17", optional = true }
 libsecp256k1 = { package = "secp256k1", version = "0.33.1", default-features = false, optional = true }
 
 [features]
-default = ["kes", "vrf", "plutus"]
+default = ["byron", "kes", "vrf", "plutus"]
+# `cardano-crypto`'s extended keys: HMAC and PBKDF2 for generation and
+# derivation, ChaCha20 for the passphrase encryption of the secret
+byron = ["cryptoxide/hmac", "cryptoxide/pbkdf2", "cryptoxide/chacha"]
 kes = []
 vrf = []
 plutus = []
@@ -41,7 +44,7 @@ blst = ["plutus", "dep:blst"]
 secp256k1 = ["plutus", "dep:libsecp256k1"]
 
 # The C ABI of the crate: libsodium + VRF extension; libsecp256k1; blst
-capi = ["kes", "vrf", "plutus", "cryptoxide/hmac"]
+capi = ["byron", "kes", "vrf", "plutus", "cryptoxide/hmac"]
 
 [profile.release]
 debug = true

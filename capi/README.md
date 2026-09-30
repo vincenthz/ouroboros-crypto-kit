@@ -5,12 +5,23 @@
 | libsodium, with the input-output-hk VRF extension | `libsodium` 1.0.20 | 69 | `cardano-crypto-class`, `cardano-crypto-praos` |
 | libsecp256k1 | `libsecp256k1` 0.6.0 | 24 | `cardano-crypto-class` (CIP-0049) |
 | blst | `libblst` 0.3.14 | 55 | `cardano-crypto-class` (CIP-0381) |
+| `cardano-crypto`'s bundled C (`cbits/`) | — | 12 | `cardano-crypto` (`Cardano.Crypto.Wallet`, `Crypto.ECC.Ed25519Donna`) |
 
 Only the subset each package actually imports is provided — the VRF, hashes,
 Ed25519, guarded allocation and CSPRNG from libsodium; ECDSA, Schnorr/BIP-340
 and their key handling from libsecp256k1; G1/G2 arithmetic, (de)serialisation,
 hash-to-group and the pairing from blst. Nothing else in those libraries' APIs
 is implemented.
+
+`cardano-crypto` — the Byron-era keys behind `cardano-crypto-wrapper` — is
+different: it compiles `cbits/encrypted_sign.c` and a copy of ed25519-donna
+into itself (`c-sources`), and `cardano-crypto.h` declares the same 12 symbols
+it defines there. An unmodified build therefore keeps using its own C; to use
+this library instead, build `cardano-crypto` from a `source-repository-package`
+whose cabal file drops `c-sources` and adds `pkgconfig-depends: libsodium`
+(any of the three `.pc` files resolves to this library). `cardano-crypto`
+still depends on crypton for its Haskell-side hashing; only the C it compiles
+itself is replaced.
 
 ## Building and installing
 

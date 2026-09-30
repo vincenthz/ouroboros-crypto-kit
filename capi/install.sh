@@ -44,6 +44,7 @@ install -m 644 "$here/include/secp256k1.h" "$prefix/include/secp256k1.h"
 install -m 644 "$here/include/secp256k1_extrakeys.h" "$prefix/include/secp256k1_extrakeys.h"
 install -m 644 "$here/include/secp256k1_schnorrsig.h" "$prefix/include/secp256k1_schnorrsig.h"
 install -m 644 "$here/include/blst.h" "$prefix/include/blst.h"
+install -m 644 "$here/include/cardano_crypto.h" "$prefix/include/cardano_crypto.h"
 install -m 644 "$kit/target/release/$libname.$libext" "$prefix/lib/$libname.$libext"
 install -m 644 "$kit/target/release/$libname.a" "$prefix/lib/$libname.a"
 
@@ -79,7 +80,7 @@ write_pc libblst 0.3.14 \
 
 echo
 echo "installed:"
-echo "  $prefix/include/{sodium.h,sodium/randombytes.h,secp256k1*.h,blst.h}"
+echo "  $prefix/include/{sodium.h,sodium/randombytes.h,secp256k1*.h,blst.h,cardano_crypto.h}"
 echo "  $prefix/lib/$libname.$libext"
 echo "  $prefix/lib/$libname.a"
 ls -1 "$prefix/lib/pkgconfig" | sed 's|^|  '"$prefix"'/lib/pkgconfig/|'

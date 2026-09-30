@@ -59,8 +59,12 @@ fn invert_or_zero(x: &FieldElement) -> FieldElement {
 }
 
 /// `fe25519_isnegative`: the least significant bit of the canonical encoding.
+///
+/// Taken from the encoding rather than from eccoxide's `sign`, which reads the
+/// parity of a representation that is not always reduced: a zero obtained by
+/// negation reports itself negative.
 fn fe_is_negative(x: &FieldElement) -> bool {
-    x.sign() == Sign::Negative
+    x.to_bytes_le()[0] & 1 == 1
 }
 
 fn sign_of_bit(bit: bool) -> Sign {
@@ -106,9 +110,9 @@ pub fn fe_is_not_square(x: &FieldElement) -> bool {
 /// `ge25519_p3_tobytes`: compress a point to 32 bytes (little-endian y, with
 /// the sign of x in the top bit).
 pub fn point_encode(p: &Point) -> [u8; POINT_SIZE] {
-    let (y, x_sign) = p.compress();
+    let (x, y) = p.to_affine();
     let mut out = y.to_bytes_le();
-    if x_sign == Sign::Negative {
+    if fe_is_negative(&x) {
         out[31] |= 0x80;
     }
     out

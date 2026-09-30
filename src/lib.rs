@@ -8,6 +8,8 @@
 //! * [`hash`] — the hash functions used by the chain and by Plutus.
 //! * [`ed25519`] — Ed25519 signing and verification, with the exact
 //!   acceptance criteria of the node (see [`ed25519::verify`]).
+//! * [`byron`] — the extended Ed25519 keys of `cardano-crypto` that sign
+//!   everything in the Byron era, with crypton's verification rules.
 //! * [`vrf`] — the two VRF flavours of Praos:
 //!   [`vrf::praos`] (`draft-03`, used since Shelley) and
 //!   [`vrf::praos_batch`] (`draft-13` batch-compatible).
@@ -27,6 +29,7 @@
 //! | [`vrf::praos`] | `cardano-crypto-praos/cbits/vrf03` + its vendored `ed25519_ref10` | 7 from `cardano-base`, 31 from libsodium |
 //! | [`vrf::praos_batch`] | `cardano-crypto-praos/cbits/vrf13_batchcompat` | 7 from `cardano-base` |
 //! | [`kes`] | `cardano-crypto-class` `Cardano.Crypto.KES.{Sum,CompactSum}` | the 14 Haskell-generated `.bin` files |
+//! | [`byron`] | `cardano-crypto` `cbits/encrypted_sign.c` + ed25519-donna, crypton `Ed25519.verify` | 51 + 9 `cardano-crypto` goldens |
 //! | [`ed25519`] | libsodium `crypto_sign_verify_detached` | RFC 8032 |
 //! | [`plutus::bls12_381`] | `blst` as used by `plutus-core` (CIP-0381) | 10 from RFC 9380, 78 from `ethereum/bls12-381-tests` |
 //! | [`plutus::secp256k1`] | `libsecp256k1` as used by `plutus-core` (CIP-0049) | 19 BIP-340, 252 Wycheproof |
@@ -51,6 +54,9 @@ pub mod edwards25519;
 pub mod hash;
 
 pub mod ed25519;
+
+#[cfg(feature = "byron")]
+pub mod byron;
 
 #[cfg(feature = "kes")]
 pub mod kes;

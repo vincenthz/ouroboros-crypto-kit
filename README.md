@@ -5,8 +5,8 @@ feature flags select the upstream `blst` and `libsecp256k1` C implementations
 behind the same public API.
 
 ```
-cargo test                                  # 80 tests
-cargo test --features capi                  # 108, the C ABI included
+cargo test                                  # 93 tests
+cargo test --features capi                  # 122, the C ABI included
 cargo test --features blst                  # native blst backend
 cargo test --features secp256k1             # native libsecp256k1 backend
 cargo test --features blst,secp256k1        # both native Plutus backends
@@ -30,6 +30,7 @@ combinations use the requested backend.
 |---|---|
 | `hash` | Blake2b-160/224/256/512, SHA-256/512, SHA3-256, Keccak-256, RIPEMD-160, and `expand_message_xmd` for both SHA-256 and SHA-512 |
 | `ed25519` | signing and verification, with the node's exact acceptance rules |
+| `byron` | `cardano-crypto`'s extended keys, which sign everything in the Byron era: `XPrv`/`XPub`, both master key generations, V1/V2 derivation, passphrase encryption, and crypton's verification rules (also used for AVVM redeem keys) |
 | `edwards25519` | the low-level `ref10`-compatible layer: point encoding, both Elligator2 variants, canonicity and small-order checks |
 | `vrf::praos` | `draft-irtf-cfrg-vrf-03`, the VRF every block since Shelley uses (80-byte proofs) |
 | `vrf::praos_batch` | `draft-irtf-cfrg-vrf-13` batch-compatible (128-byte proofs) |
@@ -40,12 +41,18 @@ combinations use the requested backend.
 
 ## The C ABI
 
-`capi/` exports 148 symbols under the names, signatures and struct layouts that
-`cardano-crypto-class` and `cardano-crypto-praos` already expect:
+`capi/` exports 160 symbols under the names, signatures and struct layouts that
+`cardano-crypto-class`, `cardano-crypto-praos` and `cardano-crypto` already
+expect:
 
 * 69 for libsodium (the input-output-hk VRF extension included)
 * 24 for libsecp256k1
-* 55 for blst.
+* 55 for blst
+* 12 for `cardano-crypto`'s own C (`wallet_encrypted_*`, `cardano_crypto_ed25519_*`).
+
+`cardano-crypto` compiles that C into itself instead of linking a library, so
+the last 12 replace it only when the package is built without its `c-sources`
+and linked against this library — see `capi/README.md`.
 
 The headers in `capi/include/` are the contract and the documentation;
 `capi/install.sh` builds the library and writes one `.pc` per replaced library,
@@ -64,6 +71,7 @@ vectors produced by other people's code.
 | ---- | ------- | ------ |
 | VRF draft-03 | 7 + 31 | `cardano-base` `test_vectors/vrf_ver03_*`, and libsodium's own `test/default/vrf.c` |
 | VRF draft-13 | 7 | `cardano-base` `test_vectors/vrf_ver13_*` |
+| Byron keys | 51 + 9 | `cardano-crypto` `tests/goldens/cardano/crypto/{wallet,signature-ed25519}`: generation, V1/V2 derivation, signing, verification |
 | KES | 14 files | Haskell-generated keys, evolutions and signatures for `Sum{0,1,6}KES` and `CompactSum{0,1,6}KES` |
 | Ed25519 | 3 + edge cases | RFC 8032, plus the small-order / non-canonical rejections |
 | `expand_message_xmd` | 5 | RFC 9380 appendix K.3 |
@@ -86,6 +94,12 @@ unchanged against the C ABI.
   `ECVRF_edwards25519_XMD:SHA-512_ELL2_NU_\x04`, and includes the verification
   key in the challenge. The `vrf_dalek` crate's `vrf10_batchcompat` does neither
   and is *not* compatible with `PraosBatchCompatVRF`.
+* **Byron verification** is crypton's ed25519-donna, not libsodium: it accepts
+  a non-canonically encoded or small-order verification key and a small-order
+  `R`, which `ed25519::verify` rejects. Use `byron::verify` for Byron data.
+* **Byron `DerivationScheme1`** drops the carries between bytes both when
+  multiplying `ZL` by 8 and when adding the right halves, and serialises the
+  index big-endian. Every Byron "random" wallet address depends on it.
 * **Ed25519 verification** additionally rejects a small-order `R`, and a
   verification key that is non-canonically encoded or of small order — the three
   checks libsodium performs and a plain `cryptoxide::ed25519::verify` does not.

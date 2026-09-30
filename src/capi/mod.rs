@@ -1,11 +1,13 @@
 //! The C ABI of this crate: drop-in replacements for the parts of libsodium
 //! (including the input-output-hk VRF extension), libsecp256k1 and blst that a
-//! Cardano node links against.
+//! Cardano node links against, and for the C that `cardano-crypto` compiles
+//! into itself for the Byron-era keys.
 //!
 //! The point of this module is that `cardano-crypto-class` and
-//! `cardano-crypto-praos` can be built and linked without a single line of C
-//! cryptography: the symbols their `foreign import`s name are exported from
-//! here, with the same signatures and the same acceptance rules, and the work
+//! `cardano-crypto-praos` (and, with its `c-sources` removed, `cardano-crypto`)
+//! can be built and linked without a single line of C cryptography: the
+//! symbols their `foreign import`s name are exported from here, with the same
+//! signatures and the same acceptance rules, and the work
 //! is done by the Rust in the rest of the crate.
 //!
 //! The headers that go with these definitions are in `capi/include`; they are
@@ -44,6 +46,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 mod blst;
+mod byron;
 mod hash;
 mod mac;
 mod mem;
