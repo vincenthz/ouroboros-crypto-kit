@@ -6,8 +6,18 @@
 //! `r` equal to the field modulus, `s` equal to the group order, points at
 //! infinity — so it pins down the rejection behaviour and not just the happy
 //! path.
+//!
+//! The verdicts are three-way, as the Plutus builtins see them: a key or
+//! signature that does not decode is an error, a decoded signature that does
+//! not verify is `Ok(false)`.
 
-use ouroboros_crypto_kit::plutus::secp256k1::{verify_schnorr, Secp256k1Error};
+use ouroboros_crypto_kit::plutus::secp256k1::{Secp256k1Error, verify_ecdsa, verify_schnorr};
+
+/// n, the group order, big-endian.
+const ORDER: [u8; 32] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
+    0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+];
 
 fn hex(s: &str) -> Vec<u8> {
     fn nibble(c: u8) -> u8 {
@@ -57,12 +67,15 @@ fn bip340_verification_vectors() {
         };
         let comment = f.get(7).copied().unwrap_or("");
 
+        // rows 5 and 14 are keys that do not parse: an error for the builtin;
+        // every other FALSE row (r = p and s = n included) is a plain False
+        let want = if comment.starts_with("public key") {
+            Err(Secp256k1Error::InvalidPublicKey)
+        } else {
+            Ok(expected)
+        };
         let got = verify_schnorr(&pk, &msg, &sig);
-        assert_eq!(
-            got.is_ok(),
-            expected,
-            "row {index} ({comment}): expected {expected}, got {got:?}"
-        );
+        assert_eq!(got, want, "row {index} ({comment})");
         checked += 1;
         if expected {
             positive += 1;
@@ -81,6 +94,8 @@ fn bip340_verification_vectors() {
 /// `libsecp256k1` — and therefore the Plutus builtin — rejects it. The
 /// expectation is adjusted accordingly, which also means these vectors pin down
 /// the malleability rule on 30-odd real signatures rather than a synthetic one.
+/// A signature that is not 64 bytes, or whose `r` or `s` is not below `n`, does
+/// not decode (`secp256k1_ecdsa_signature_parse_compact`): an error, not `False`.
 #[test]
 fn wycheproof_ecdsa_vectors() {
     // (n-1)/2, big-endian: an s above this is "high"
@@ -119,11 +134,17 @@ fn wycheproof_ecdsa_vectors() {
         let high_s = sig.len() == 64 && sig[32..] > HALF_ORDER[..];
         let expected = wycheproof_valid && !high_s;
 
-        let got = ouroboros_crypto_kit::plutus::secp256k1::verify_ecdsa(&pk, &digest, &sig);
+        let decodes = sig.len() == 64 && sig[..32] < ORDER[..] && sig[32..] < ORDER[..];
+        let want = if decodes {
+            Ok(expected)
+        } else {
+            Err(Secp256k1Error::InvalidSignature)
+        };
+
+        let got = verify_ecdsa(&pk, &digest, &sig);
         assert_eq!(
-            got.is_ok(),
-            expected,
-            "tc {tc} ({comment}): expected {expected} (wycheproof {wycheproof_valid}, high_s {high_s}), got {got:?}"
+            got, want,
+            "tc {tc} ({comment}): wycheproof {wycheproof_valid}, high_s {high_s}"
         );
 
         checked += 1;
@@ -154,4 +175,48 @@ fn schnorr_rejects_wrong_lengths() {
         verify_schnorr(&pk, b"", &sig[..63]).unwrap_err(),
         Secp256k1Error::InvalidSignature
     );
+}
+
+/// libsecp256k1 v0.3.2's own vectors (its Wycheproof "bitcoin" ECDSA file and the
+/// BIP-340 vectors of its `tests_impl.h`), each with the outcome of the node's
+/// path through `cardano-crypto-class`, as cn's oracle-crypto known-answer tests
+/// record them (see the header of the data file).
+#[test]
+fn libsecp256k1_v0_3_2_vectors_through_cardano_crypto_class() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/data/secp256k1/libsecp256k1-v0.3.2-kat.txt");
+    let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    let field = |s: &str| if s == "-" { Vec::new() } else { hex(s) };
+
+    let mut counts = std::collections::BTreeMap::new();
+    for (i, line) in content.lines().enumerate() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(f.len(), 5, "line {}: {line}", i + 1);
+        let (vk, msg, sig) = (field(f[1]), field(f[2]), field(f[3]));
+        let want = match f[4] {
+            "accept" => Ok(true),
+            "reject" => Ok(false),
+            "bad-vk" => Err(Secp256k1Error::InvalidPublicKey),
+            "bad-sig" => Err(Secp256k1Error::InvalidSignature),
+            other => panic!("line {}: outcome {other}", i + 1),
+        };
+        let got = match f[0] {
+            "ecdsa" => verify_ecdsa(&vk, &msg, &sig),
+            "schnorr" => verify_schnorr(&vk, &msg, &sig),
+            other => panic!("line {}: scheme {other}", i + 1),
+        };
+        assert_eq!(got, want, "line {}: {line}", i + 1);
+        *counts.entry((f[0], f[4])).or_insert(0) += 1;
+    }
+    let count = |k: (&str, &str)| counts.get(&k).copied().unwrap_or(0);
+    assert_eq!(count(("ecdsa", "accept")), 162);
+    assert_eq!(count(("ecdsa", "reject")), 27);
+    assert_eq!(count(("ecdsa", "bad-sig")), 42);
+    assert_eq!(count(("ecdsa", "bad-vk")), 2);
+    assert_eq!(count(("schnorr", "accept")), 9);
+    assert_eq!(count(("schnorr", "reject")), 8);
+    assert_eq!(count(("schnorr", "bad-vk")), 2);
 }

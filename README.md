@@ -35,7 +35,7 @@ combinations use the requested backend.
 | `vrf::praos` | `draft-irtf-cfrg-vrf-03`, the VRF every block since Shelley uses (80-byte proofs) |
 | `vrf::praos_batch` | `draft-irtf-cfrg-vrf-13` batch-compatible (128-byte proofs) |
 | `kes` | `SumKES` and `CompactSumKES` over Ed25519/Blake2b-256, depths 0–7 |
-| `plutus::secp256k1` | `verifyEcdsaSecp256k1Signature`, `verifySchnorrSecp256k1Signature` |
+| `plutus::secp256k1` | `verifyEcdsaSecp256k1Signature`, `verifySchnorrSecp256k1Signature`, three-way as `plutus-core` sees libsecp256k1: a key or signature that does not decode is an error, a decoded signature that does not verify is `false` |
 | `plutus::bls12_381` | the Plutus surface over G1/G2, hash-to-curve and ZCash (de)serialisation: `blst`'s error taxonomy, the DST limit, scalar reduction, and `millerLoop`/`mulMlResult`/`finalVerify` |
 | `capi` | the C ABI, behind the `capi` feature — see `capi/README.md` |
 
@@ -79,6 +79,7 @@ vectors produced by other people's code.
 | BLS everything else | 78 | `ethereum/bls12-381-tests` v0.1.2 (generated with `py_ecc` and `blst`): compressed-point deserialisation including every malformed case, signing, verification, aggregation |
 | Schnorr (BIP-340) | 19 | the BIPs repository's `test-vectors.csv`, including all the rejection cases |
 | ECDSA | 252 | Wycheproof `ecdsa_secp256k1_sha256_p1363` |
+| secp256k1 through `cardano-crypto-class` | 233 + 19 | libsecp256k1 v0.3.2's own Wycheproof ECDSA file and BIP-340 vectors, with the node's four outcomes (accept, reject, bad key, bad signature) as cn's oracle-crypto answers them |
 
 Beyond the vectors, the most direct check available is that the cardano-base
 crypto test suites — `cardano-crypto-praos` and `cardano-crypto-class` — run
@@ -95,8 +96,11 @@ unchanged against the C ABI.
   key in the challenge. The `vrf_dalek` crate's `vrf10_batchcompat` does neither
   and is *not* compatible with `PraosBatchCompatVRF`.
 * **Byron verification** is crypton's ed25519-donna, not libsodium: it accepts
-  a non-canonically encoded or small-order verification key and a small-order
-  `R`, which `ed25519::verify` rejects. Use `byron::verify` for Byron data.
+  a non-canonically encoded or small-order verification key, a small-order
+  `R`, and an `S` that is not reduced mod l (any `S` below 2^253, so `S + l`
+  verifies wherever `S` does; only the top 3 bits of `S` are checked), all of
+  which `ed25519::verify` rejects. Use `byron::verify` for Byron data, and
+  never for data the node checks with libsodium.
 * **Byron `DerivationScheme1`** drops the carries between bytes both when
   multiplying `ZL` by 8 and when adding the right halves, and serialises the
   index big-endian. Every Byron "random" wallet address depends on it.
@@ -106,8 +110,12 @@ unchanged against the C ABI.
 * **KES verification** places no bound on the period, matching `verifyKES`: a
   period beyond the tree's capacity walks to the right-most leaf instead of
   being rejected. The consensus layer is what bounds it.
-* **ECDSA** rejects an `s` in the upper half of the scalar field and accepts
-  `x(R) == r + n`, both because `libsecp256k1` does.
+* **ECDSA** answers `false` for an `s` in the upper half of the scalar field
+  and for `r = 0` or `s = 0`, and accepts `x(R) == r + n`, all because
+  `libsecp256k1`'s `secp256k1_ecdsa_verify` does; the compact signature parse
+  only rejects an `r` or `s` that is not below the group order (an error).
+* **Schnorr** signatures are not parsed: an `r >= p` or `s >= n` is `false`
+  from `secp256k1_schnorrsig_verify`, not a decoding error.
 
 `MlResult` is the one place where the representation is deliberately *not*
 `blst`'s, and it does not have to be: Plutus can only multiply and compare
