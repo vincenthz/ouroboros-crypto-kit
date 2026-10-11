@@ -305,7 +305,7 @@ pub unsafe extern "C" fn secp256k1_ecdsa_verify(
         };
         let sig: [u8; 64] = super::read_array(sig);
         let msg: [u8; 32] = super::read_array(msghash32);
-        c_int::from(verify_ecdsa(&pk, &msg, &sig).is_ok())
+        c_int::from(verify_ecdsa(&pk, &msg, &sig) == Ok(true))
     }
 }
 
@@ -597,7 +597,7 @@ pub unsafe extern "C" fn secp256k1_schnorrsig_verify(
     unsafe {
         let pk: [u8; 32] = super::read_array(pubkey);
         let sig: [u8; 64] = super::read_array(sig64);
-        c_int::from(verify_schnorr(&pk, super::as_slice(msg, msglen), &sig).is_ok())
+        c_int::from(verify_schnorr(&pk, super::as_slice(msg, msglen), &sig) == Ok(true))
     }
 }
 
