@@ -26,8 +26,12 @@
 //! Byron signatures are checked by crypton's ed25519-donna rather than by
 //! libsodium, and the two disagree on edge cases. [`verify`] (like donna):
 //!
-//! 1. rejects an `s` with any of its top 3 bits set, or that is not reduced
-//!    mod l;
+//! 1. rejects an `s` with any of its top 3 bits set, but otherwise accepts an
+//!    `s` that is not reduced mod l (any `s` in `[l, 2^253)`), which it
+//!    reduces before use: crypton's `crypton_ed25519_sign_open`
+//!    (`cbits/ed25519/ed25519.c:88-110` in crypton-1.0.6) checks only
+//!    `RS[63] & 224` and has no `s < l` check, so `s + l` verifies wherever
+//!    `s` does;
 //! 2. decodes the verification key *without* rejecting a non-canonical
 //!    encoding (y >= p) or a point of small order;
 //! 3. places no restriction on `R` beyond the final comparison, so a
@@ -35,8 +39,9 @@
 //! 4. compares `R` to `[s]B - [k]A` byte for byte, so a non-canonically
 //!    encoded `R` never matches.
 //!
-//! [`crate::ed25519::verify`] rejects points 2 and 3, so using it on Byron
-//! data would reject blocks the node accepts.
+//! [`crate::ed25519::verify`] rejects points 2 and 3 and an unreduced `s`, so
+//! using it on Byron data would reject blocks the node accepts; conversely
+//! [`verify`] must never be used where the node checks with libsodium.
 
 use eccoxide::curve::curve25519::{Point, Scalar};
 use eccoxide::curve::field::Sign;
@@ -543,9 +548,16 @@ fn point_add(p: &[u8; 32], q: &[u8; 32]) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// ed25519-donna's `ed25519_sign_open`, with or without crypton's check that
-/// `s` is reduced mod l.
-fn donna_verify(public_key: &[u8; 32], message: &[u8], sig: &[u8; 64], canonical_s: bool) -> bool {
+/// ed25519-donna's `ed25519_sign_open`, as both crypton
+/// (`crypton_ed25519_sign_open`, `cbits/ed25519/ed25519.c:88-110` in
+/// crypton-1.0.6) and `cardano-crypto` (`cardano_crypto_ed25519_sign_open`)
+/// compile it; the two bodies are identical.
+///
+/// The only checks before the final comparison are, in this order, that none
+/// of the top 3 bits of `s` is set (`RS[63] & 224`) and that the verification
+/// key decodes. `s` is then reduced mod l (`expand256_modm`) without any
+/// `s < l` check, so every `s` below 2^253 is accepted in place of `s mod l`.
+fn donna_verify(public_key: &[u8; 32], message: &[u8], sig: &[u8; 64]) -> bool {
     if sig[63] & 0xe0 != 0 {
         return false;
     }
@@ -554,14 +566,7 @@ fn donna_verify(public_key: &[u8; 32], message: &[u8], sig: &[u8; 64], canonical
     };
     let r: [u8; 32] = sig[..32].try_into().expect("32 bytes");
     let s_bytes: [u8; 32] = sig[32..].try_into().expect("32 bytes");
-    let s = if canonical_s {
-        match ed::scalar_from_canonical_bytes(&s_bytes) {
-            Some(s) => s,
-            None => return false,
-        }
-    } else {
-        ed::scalar_reduce(&s_bytes)
-    };
+    let s = ed::scalar_reduce(&s_bytes);
     let h = hram(&r, public_key, message);
     ed::point_encode(&ed::double_scalarmult_base(&h, &neg_a, &s)) == r
 }
@@ -573,7 +578,7 @@ fn donna_verify(public_key: &[u8; 32], message: &[u8], sig: &[u8; 64], canonical
 /// See the [module documentation](self) for how this differs from
 /// [`crate::ed25519::verify`].
 pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> bool {
-    donna_verify(public_key.as_bytes(), message, signature.as_bytes(), true)
+    donna_verify(public_key.as_bytes(), message, signature.as_bytes())
 }
 
 /// The primitives of `cardano-crypto`'s `cbits/ed25519/ed25519.c`, for the C
@@ -590,10 +595,10 @@ pub(crate) mod donna {
         *Secret(*sk).sign_with(pk, message).as_bytes()
     }
 
-    /// `cardano_crypto_ed25519_sign_open`: unlike crypton's copy, this donna
-    /// does not require `s` to be reduced.
+    /// `cardano_crypto_ed25519_sign_open`: the same donna as crypton's, so
+    /// the same function as [`verify`].
     pub(crate) fn sign_open(pk: &[u8; 32], message: &[u8], sig: &[u8; 64]) -> bool {
-        donna_verify(pk, message, sig, false)
+        donna_verify(pk, message, sig)
     }
 
     pub(crate) fn scalar_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
@@ -693,22 +698,123 @@ mod tests {
         Signature::from_bytes(b)
     }
 
+    /// l, the order of the base point, little-endian.
+    const L: [u8; 32] = [
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
+        0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+    ];
+
+    const IDENTITY: &str = "0100000000000000000000000000000000000000000000000000000000000000";
+
     #[test]
-    fn rejects_unreduced_s() {
+    fn accepts_unreduced_s() {
+        // crypton_ed25519_sign_open (ed25519.c:88-110) has no s < l check, so
+        // s + l, still below 2^253, verifies wherever s does
         let k = key();
         let sig = k.sign(b"", b"m");
-        // s + l, still below 2^253
-        const L: [u8; 32] = [
-            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
-            0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
-        ];
         let s = add_256(&sig.as_bytes()[32..], &L, true);
         assert_eq!(s[31] & 0xe0, 0);
         let malleated = sig_with_s(&sig, &s);
-        assert!(!k.to_xpub().verify(b"m", &malleated));
-        // cardano-crypto's own donna has no such check
+        assert_ne!(malleated, sig);
+        assert!(k.to_xpub().verify(b"m", &malleated));
+        assert!(verify(&k.public_key(), b"m", &malleated));
+        assert!(!k.to_xpub().verify(b"n", &malleated));
+        // cardano-crypto's own donna is the same function
         let pk = *k.public_key().as_bytes();
-        assert!(donna_verify(&pk, b"m", malleated.as_bytes(), false));
+        assert!(donna_verify(&pk, b"m", malleated.as_bytes()));
+        // libsodium (Ed25519DSIGN) requires s < l
+        assert!(crate::ed25519::verify(&k.public_key(), b"m", &sig));
+        assert!(!crate::ed25519::verify(&k.public_key(), b"m", &malleated));
+    }
+
+    #[test]
+    fn b1_rfc8032_test1_with_s_plus_l() {
+        // RFC 8032 7.1 TEST 1 with s replaced by s + l: crypton accepts it,
+        // both as Wallet.verify (an XPub with any chain code) and as
+        // verifyRedeemSigRaw (a plain key). Also oracle-byron's KAT
+        // "B-1: honest signature with S + l is accepted".
+        let pk = PublicKey::from_bytes(hex_array::<32>(
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+        ));
+        let honest = Signature::from_bytes(hex_array::<64>(
+            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+        ));
+        let bumped = Signature::from_bytes(hex_array::<64>(
+            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901554c8c7872aa064e049dbb3013fbf29380d25bf5f0595bbe24655141438e7a101b",
+        ));
+        assert_eq!(
+            add_256(&honest.as_bytes()[32..], &L, true),
+            bumped.as_bytes()[32..]
+        );
+        let mut xpub = [0u8; XPUB_SIZE];
+        xpub[..32].copy_from_slice(pk.as_bytes());
+        let xpub = XPub::from_bytes(xpub);
+        for sig in [&honest, &bumped] {
+            assert!(verify(&pk, b"", sig));
+            assert!(xpub.verify(b"", sig));
+            assert!(!verify(&pk, b"x", sig));
+        }
+        // the strict (libsodium) verifier accepts only the reduced one
+        assert!(crate::ed25519::verify(&pk, b"", &honest));
+        assert!(!crate::ed25519::verify(&pk, b"", &bumped));
+    }
+
+    #[test]
+    fn b1_identity_key_and_r_with_s_l() {
+        // A = R = identity: [s]B - [k]A = R exactly when s = 0 mod l. crypton
+        // accepts s = 0 and s = l; s = 2l (the next multiple) is above 2^253
+        // and fails the top-3-bits check; s = 1 fails the comparison.
+        let identity = hex_array::<32>(IDENTITY);
+        let pk = PublicKey::from_bytes(identity);
+        let with_s = |s: &[u8; 32]| {
+            let mut sig = [0u8; 64];
+            sig[..32].copy_from_slice(&identity);
+            sig[32..].copy_from_slice(s);
+            Signature::from_bytes(sig)
+        };
+        let two_l = add_256(&L, &L, true);
+        assert_eq!(
+            two_l,
+            hex_array::<32>("daa7ebb934c624b0ac39ef45bdf3bd2900000000000000000000000000000020")
+        );
+        let mut one = [0u8; 32];
+        one[0] = 1;
+        for msg in [&b""[..], b"anything"] {
+            assert!(verify(&pk, msg, &with_s(&[0u8; 32])));
+            assert!(verify(&pk, msg, &with_s(&L)));
+            assert!(!verify(&pk, msg, &with_s(&two_l)));
+            assert!(!verify(&pk, msg, &with_s(&one)));
+            // libsodium rejects the small-order key and R, whatever s is
+            for s in [[0u8; 32], L] {
+                assert!(!crate::ed25519::verify(&pk, msg, &with_s(&s)));
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_s_with_top_bits_set() {
+        // RS[63] & 224 is checked before anything else, even when s mod l
+        // would verify: s + 2^253, s + 2^254 and s + 2^255 are rejected
+        let k = key();
+        let sig = k.sign(b"", b"m");
+        for bit in [0x20u8, 0x40, 0x80] {
+            let mut b = *sig.as_bytes();
+            b[63] |= bit;
+            let bad = Signature::from_bytes(b);
+            assert!(!k.to_xpub().verify(b"m", &bad), "{bit:#x}");
+        }
+        // the largest s below 2^253 is accepted by the bit check and then
+        // reduced: it verifies under A = R = identity only if it is 0 mod l,
+        // which 2^253 - 1 is not
+        let identity = hex_array::<32>(IDENTITY);
+        let mut max = [0xffu8; 64];
+        max[..32].copy_from_slice(&identity);
+        max[63] = 0x1f;
+        assert!(!verify(
+            &PublicKey::from_bytes(identity),
+            b"",
+            &Signature::from_bytes(max)
+        ));
     }
 
     #[test]

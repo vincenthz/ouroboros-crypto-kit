@@ -95,8 +95,11 @@ unchanged against the C ABI.
   key in the challenge. The `vrf_dalek` crate's `vrf10_batchcompat` does neither
   and is *not* compatible with `PraosBatchCompatVRF`.
 * **Byron verification** is crypton's ed25519-donna, not libsodium: it accepts
-  a non-canonically encoded or small-order verification key and a small-order
-  `R`, which `ed25519::verify` rejects. Use `byron::verify` for Byron data.
+  a non-canonically encoded or small-order verification key, a small-order
+  `R`, and an `S` that is not reduced mod l (any `S` below 2^253, so `S + l`
+  verifies wherever `S` does; only the top 3 bits of `S` are checked), all of
+  which `ed25519::verify` rejects. Use `byron::verify` for Byron data, and
+  never for data the node checks with libsodium.
 * **Byron `DerivationScheme1`** drops the carries between bytes both when
   multiplying `ZL` by 8 and when adding the right halves, and serialises the
   index big-endian. Every Byron "random" wallet address depends on it.
